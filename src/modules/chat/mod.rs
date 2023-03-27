@@ -78,6 +78,9 @@ async fn handle_chat_message(
     }
     text = text.trim().to_owned();
 
+    println!(">>>>>>>>>>>> msg: {msg:?}");
+    println!(">>>>>>>>>>>> text: {text:?}");
+
     if let Err(err) = actually_handle_chat_message(
         bot,
         Some(msg),
@@ -195,11 +198,14 @@ async fn actually_handle_chat_message(
     openai_client: OpenAIClient,
     config: SharedConfig,
 ) -> HandlerResult {
+    println!(">>>>>>>>>> 11111");
     // Send a progress indicator message first.
     let progress_bar = BrailleProgress::new(1, 1, 3, Some("Thinking... 🤔".to_owned()));
     let mut send_progress_msg = bot.send_message(chat_id.clone(), progress_bar.current_string());
     send_progress_msg.reply_to_message_id = reply_to_msg.as_ref().map(|m| m.id);
     let sent_progress_msg = send_progress_msg.await?;
+
+    println!(">>>>>>>>>> 22222");
 
     // Construct the request messages.
     let mut msgs = session_mgr.get_history_messages(&chat_id);
@@ -209,6 +215,8 @@ async fn actually_handle_chat_message(
         .build()
         .unwrap();
     msgs.push(user_msg.clone());
+
+    println!(">>>>>>>>>> 33333");
 
     let result = stream_model_result(
         &bot,
@@ -221,9 +229,16 @@ async fn actually_handle_chat_message(
     )
     .await;
 
+    println!(">>>>>>>>>> 444444 result: {result:#?}");
+
     // Record stats and add the reply to history.
     let reply_result = match result {
         Ok(res) => {
+            if res.content.is_empty() {
+                return Ok(());
+            }
+
+            println!(">>>>>>>>>> 55555: res: {res:#?}");
             let reply_history_message = session_mgr.with_mut_session(chat_id.clone(), |session| {
                 session.prepare_history_message(
                     ChatCompletionRequestMessageArgs::default()
@@ -234,6 +249,8 @@ async fn actually_handle_chat_message(
                 )
             });
 
+            println!(">>>>>>>>>> 66666");
+
             let need_fallback = if config.renders_markdown {
                 let parsed_content = markdown::parse(&res.content);
                 #[cfg(debug_assertions)]
@@ -243,11 +260,15 @@ async fn actually_handle_chat_message(
                         res.content, parsed_content
                     );
                 }
+
+                println!(">>>>>>>>>> dddd");
                 let mut edit_message_text = bot.edit_message_text(
                     chat_id.to_owned(),
                     sent_progress_msg.id,
                     parsed_content.content,
                 );
+
+                println!(">>>>>>>>>> eeee");
                 if !parsed_content.entities.is_empty() {
                     let show_raw_button = InlineKeyboardButton::callback(
                         "Show Raw Contents",
@@ -257,6 +278,7 @@ async fn actually_handle_chat_message(
                     edit_message_text.reply_markup =
                         Some(InlineKeyboardMarkup::default().append_row([show_raw_button]));
                 }
+                println!(">>>>>>>>>> fffff");
                 if let Err(first_trial_err) = edit_message_text.await {
                     // TODO: test if the error is related to Markdown before
                     // fallback to raw contents.
@@ -272,16 +294,23 @@ async fn actually_handle_chat_message(
                 true
             };
 
+            println!(">>>>>>>>>> 77777");
+
             if need_fallback {
+                println!(">>>>>>>>>> 77777 aaaa content: {}", &res.content);
                 bot.edit_message_text(chat_id.to_owned(), sent_progress_msg.id, &res.content)
                     .await?;
             }
+
+            println!(">>>>>>>>>> 88888");
 
             session_mgr.with_mut_session(chat_id.clone(), |session| {
                 let user_history_msg = session.prepare_history_message(user_msg);
                 session.add_history_message(user_history_msg);
                 session.add_history_message(reply_history_message);
             });
+
+            println!(">>>>>>>>>> 99999");
 
             // TODO: maybe we need to handle the case that `reply_to_msg` is `None`.
             if let Some(from_username) = reply_to_msg
@@ -296,9 +325,12 @@ async fn actually_handle_chat_message(
                     error!("Failed to update stats: {}", err);
                 }
             }
+
+            println!(">>>>>>>>>> aaaaaa");
             Ok(())
         }
         Err(err) => {
+            println!(">>>>>>>>>> bbbbb");
             error!("Failed to request the model: {}", err);
             session_mgr.swap_session_pending_message(chat_id.clone(), Some(user_msg));
             let retry_button = InlineKeyboardButton::callback("Retry", "/retry");
@@ -309,6 +341,8 @@ async fn actually_handle_chat_message(
                 .map(|_| ())
         }
     };
+
+    println!(">>>>>>>>>> cccccc");
 
     if let Err(err) = reply_result {
         error!("Failed to edit the final message: {}", err);
@@ -326,11 +360,16 @@ async fn stream_model_result(
     openai_client: OpenAIClient,
     config: &SharedConfig,
 ) -> Result<ChatModelResult, Error> {
+    println!(">>>>>>>>> stream_model_result 1111");
     let estimated_prompt_tokens = openai_client.estimate_prompt_tokens(&msgs);
+
+    println!(">>>>>>>>> stream_model_result 2222");
 
     let stream = openai_client.request_chat_model(msgs).await?;
     let mut throttled_stream =
         stream.throttle_buffer::<Vec<_>>(Duration::from_millis(config.stream_throttle_interval));
+
+    println!(">>>>>>>>> stream_model_result 3333");
 
     let mut timeout_times = 0;
     let mut last_response = None;
@@ -340,6 +379,8 @@ async fn stream_model_result(
                 if res.is_none() {
                     break;
                 }
+
+                println!(">>>>>>>>> stream_model_result xxxx 44444");
 
                 // Since the stream item is scanned (accumulated), we only
                 // need to get the last item in the buffer and use it as
@@ -357,6 +398,8 @@ async fn stream_model_result(
             }
         }
 
+        println!(">>>>>>>>> stream_model_result 44444");
+
         progress_bar.advance_progress();
         let updated_text = if let Some(last_response) = &last_response {
             format!(
@@ -368,19 +411,30 @@ async fn stream_model_result(
             progress_bar.current_string()
         };
 
-        let _ = bot
+        println!(">>>>>>>>> stream_model_result 5555");
+
+        let a = bot
             .edit_message_text(chat_id.to_owned(), editing_msg.id, updated_text)
             .await;
+
+        println!(">>>>>>>>> stream_model_result 66666, a: {:#?}", &a);
     }
 
+    println!(">>>>>>>>> stream_model_result 666");
+
     if let Some(mut last_response) = last_response {
+        println!(">>>>>>>>> stream_model_result 777");
         // TODO: OpenAI currently doesn't support to give the token usage
         // in stream mode. Therefore we need to estimate it locally.
         last_response.token_usage =
             openai_client.estimate_tokens(&last_response.content) + estimated_prompt_tokens;
 
+        println!(">>>>>>>>> stream_model_result 888: {last_response:#?}");
+
         return Ok(last_response);
     }
+
+    println!(">>>>>>>>> stream_model_result 999");
 
     Err(anyhow!("Server returned empty response"))
 }
